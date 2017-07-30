@@ -1,0 +1,10 @@
+Neos:
+  Arboretum:
+    Neo4jAdapter:
+      persistence:
+        backendOptions:
+          alias: 'bolt'
+          username: 'neo4j'
+          password: 'neo4j'
+          host: 'localhost'
+          port: 7687
