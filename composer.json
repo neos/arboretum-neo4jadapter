@@ -1,0 +1,15 @@
+{
+  "name": "neos/arboretum-neo4jadapter",
+  "type": "neos-package",
+  "description": "The neo4j database backend for the Neos Arboretum",
+  "license": "GPL-3.0+",
+  "require": {
+    "neos/arboretum": "*",
+    "graphaware/neo4j-php-client": "~4.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Neos\\Arboretum\\Neo4jAdapter\\": "Classes"
+    }
+  }
+}
