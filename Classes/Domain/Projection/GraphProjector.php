@@ -11,11 +11,10 @@ namespace Neos\Arboretum\Neo4jAdapter\Domain\Projection;
  * information, please view the LICENSE file which was distributed with this
  * source code.
  */
-
 use Neos\Arboretum\Domain\Projection\AbstractGraphProjector;
 use Neos\Arboretum\Infrastructure\Dto\Node;
-use Neos\Arboretum\Neo4jAdapter\Infrastructure\Dto\Statement;
-use Neos\Arboretum\Neo4jAdapter\Infrastructure\Service\Neo4jClient;
+use Neos\Arboretum\Neo4jAdapter\Domain;
+use Neos\Arboretum\Neo4jAdapter\Infrastructure;
 use Neos\Flow\Annotations as Flow;
 use Neos\Utility\Arrays;
 
@@ -35,12 +34,12 @@ class GraphProjector extends AbstractGraphProjector
 
     public function reset()
     {
-        $this->client->send([new Statement('MATCH (n) DETACH DELETE n')]);
+        $this->client->send([new Infrastructure\Dto\Statement('MATCH (n) DETACH DELETE n')]);
     }
 
     public function isEmpty(): bool
     {
-        $result = $this->client->send([new Statement('MATCH () RETURN count(*) AS count')]);;
+        $result = $this->client->send([new Infrastructure\Dto\Statement('MATCH () RETURN count(*) AS count')]);;
         \Neos\Flow\var_dump($result, 'isEmpty');
         #\Neos\Flow\var_dump($result);
         exit;
@@ -59,13 +58,10 @@ class GraphProjector extends AbstractGraphProjector
                 $this->flattenPropertyValue($properties, $propertyName, $propertyValue);
             }
         }
-        $nodeLabel = str_replace(['.', ':'], ['', ''], $node->nodeTypeName);
-        $this->getClient()->send([
-            new Statement('CREATE (n: $nodeLabel) SET n += $properties', [
-                'nodeLabel' => $nodeLabel,
-                'properties' => $properties
-            ])
+        $statement = new Infrastructure\Dto\Statement('CREATE (n: ' . Domain\Value\NodeLabel::fromNodeTypeName($node->nodeTypeName) . ') SET n += $properties', [
+            'properties' => $properties
         ]);
+        $this->getClient()->send([$statement]);
     }
 
     protected function flattenPropertyValue(array & $properties, string $propertyPath, array $propertyValue)
@@ -83,7 +79,7 @@ class GraphProjector extends AbstractGraphProjector
     protected function getNode(string $identifierInGraph): Node
     {
         $result = $this->getClient()->send([
-            new Statement('MATCH (n {_identifierInGraph: $identifier}) RETURN n', [
+            new Infrastructure\Dto\Statement('MATCH (n {_identifierInGraph: $identifier}) RETURN n', [
                 'identifier' => $identifierInGraph
             ])
         ])[0];
@@ -119,7 +115,7 @@ class GraphProjector extends AbstractGraphProjector
         foreach ($subgraphIdentifiers as $subgraphIdentifier) {
             $properties['_subgraphIdentifier'] = $subgraphIdentifier;
             $this->getClient()->send([
-                new Statement(
+                new Infrastructure\Dto\Statement(
                     'MATCH (p {_identifierInGraph: $parentIdentifier})'
                     . 'MATCH (c {_identifierInGraph: $childIdentifier})'
                     . 'CREATE (p)-[e:PARENT]->(c)'
@@ -142,7 +138,7 @@ class GraphProjector extends AbstractGraphProjector
         $statements = [];
         foreach ($subgraphIdentifiers as $subgraphIdentifier) {
             $statementResult = $this->getClient()->send([
-                new Statement(
+                new Infrastructure\Dto\Statement(
                     'MATCH (p)-[e:PARENT {_subgraphIdentifier: $subgraphIdentifier}]->(c {_identifierInGraph: $childIdentifier})'
                     . ' RETURN e,p',
                     [
@@ -153,12 +149,12 @@ class GraphProjector extends AbstractGraphProjector
             ]);
 
             \Neos\Flow\var_dump($statementResult);
-            $statementResult= $statementResult[0];
+            $statementResult = $statementResult[0];
 
             $parentNodeData = $statementResult->getItem(0)->get('p');
             $inboundEdgeData = $statementResult->getItem(0)->get('e');
 
-            $statements[] = new Statement(
+            $statements[] = new Infrastructure\Dto\Statement(
                 'MATCH (p {_identifierInGraph: $parentIdentifier})'
                 . 'MATCH (c {_identifierInGraph: $childIdentifier})'
                 . 'CREATE (p)-[e:PARENT]->(c)'
@@ -170,7 +166,7 @@ class GraphProjector extends AbstractGraphProjector
                 ]
             );
 
-            $statements[] = new Statement(
+            $statements[] = new Infrastructure\Dto\Statement(
                 'MATCH ()-[e:PARENT {_subgraphIdentifier: $subgraphIdentifier}]->({_identifierInGraph: $childIdentifier})'
                 . ' DELETE e',
                 [
@@ -193,7 +189,7 @@ class GraphProjector extends AbstractGraphProjector
     }
 
 
-    protected function getClient(): Neo4jClient
+    protected function getClient(): Infrastructure\Service\Neo4jClient
     {
         return $this->client;
     }
