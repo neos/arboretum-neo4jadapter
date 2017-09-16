@@ -26,8 +26,8 @@ use Neos\Utility\Arrays;
 class GraphProjector extends AbstractGraphProjector
 {
     /**
-     * @Flow\Inject
-     * @var Neo4jClient
+     * @Flow\Inject(lazy=false)
+     * @var Infrastructure\Service\Neo4jClient
      */
     protected $client;
 
