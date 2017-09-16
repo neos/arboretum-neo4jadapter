@@ -50,9 +50,12 @@ class Statement implements \JsonSerializable
 
     function jsonSerialize(): array
     {
-        return [
-            'statement' => $this->statement,
-            'parameters' => $this->parameters
+        $jsonSerializable = [
+            'statement' => $this->statement
         ];
+        if (!empty($this->parameters)) {
+            $jsonSerializable['parameters'] = $this->parameters;
+        }
+        return $jsonSerializable;
     }
 }
