@@ -3,7 +3,7 @@
 namespace Neos\Arboretum\Neo4jAdapter\Domain\Repository;
 
 /*
- * This file is part of the Neos.ContentRepository.EventSourced package.
+ * This file is part of the Neos.Arboretum.Neo4jAdapter package.
  *
  * (c) Contributors of the Neos Project - www.neos.io
  *
@@ -11,11 +11,12 @@ namespace Neos\Arboretum\Neo4jAdapter\Domain\Repository;
  * information, please view the LICENSE file which was distributed with this
  * source code.
  */
-use GraphAware\Neo4j\Client\Client;
-use Neos\Arboretum\Domain\Entity\NodeAdapter;
+
 use Neos\Arboretum\Domain as Arboretum;
+use Neos\Arboretum\Neo4jAdapter\Infrastructure\Dto\Statement;
 use Neos\Arboretum\Neo4jAdapter\Infrastructure\Service\Neo4jClient;
 use Neos\ContentRepository\Domain as ContentRepository;
+use Neos\ContentRepository\EventSourced\Domain\Model\Content\PropertyCollection;
 use Neos\Flow\Annotations as Flow;
 use Neos\Utility\Arrays;
 
@@ -35,13 +36,27 @@ class ContentSubgraph extends Arboretum\Repository\AbstractContentSubgraph
     protected $client;
 
 
-    public function findNodeByIdentifier(string $nodeIdentifier): ContentRepository\Model\NodeInterface
+    /**
+     * @param string $nodeIdentifier
+     * @return ContentRepository\Model\NodeInterface|null
+     */
+    public function findNodeByIdentifier(string $nodeIdentifier)
     {
-        // @todo: escape stuff
-        /** @var \GraphAware\Bolt\Result\Type\Node $node */
-        $rawNode = $this->getClient()->run('MATCH ()-[:PARENT {_subgraphIdentifier:"' . $this->identifier . '"}]->(n {_identifierInSubgraph: "' . $nodeIdentifier . '"}) RETURN n')->firstRecord()->get('n');
+        $statementResult = $this->client->send([
+            new Statement(
+                'MATCH ()-[:PARENT {_subgraphIdentifier: $subgraphIdentifier}]->(n {_identifierInSubgraph: $nodeIdentifier}) RETURN n',
+                [
+                    'subgraphIdentifier' => $this->identifier,
+                    'nodeIdentifier' => $nodeIdentifier
+                ]
+            )
+        ])[0];
 
-        return $this->mapNode($rawNode);
+        if ($statementResult->getItem(0)) {
+            return $this->mapNode($statementResult->getItem(0)->get('n'));
+        }
+
+        return null;
     }
 
     /**
@@ -51,9 +66,17 @@ class ContentSubgraph extends Arboretum\Repository\AbstractContentSubgraph
     public function findNodesByParent(string $parentIdentifier): array
     {
         $nodes = [];
-        foreach ($this->getClient()->run('MATCH (p {_identifierInSubgraph:"' . $parentIdentifier . '"})-[:PARENT {_subgraphIdentifier:"' . $this->identifier . '"}]->(c) RETURN c')->records() as $record) {
-            $rawNode = $record->get('n');
-            $nodes[] = $this->mapNode($rawNode);
+        $statementResult = $this->client->send([
+            new Statement(
+                'MATCH ({_identifierInSubgraph: $parentIdentifier})-[:PARENT {_subgraphIdentifier: $subgraphIdentifier}]->(c) RETURN c',
+                [
+                    'parentIdentifier' => $parentIdentifier,
+                    'subgraphIdentifier' => $this->identifier
+                ]
+            )
+        ])[0];
+        foreach ($statementResult->getItems() as $item) {
+            $nodes[] = $this->mapNode($item->get('c'));
         }
 
         return $nodes;
@@ -66,12 +89,17 @@ class ContentSubgraph extends Arboretum\Repository\AbstractContentSubgraph
     public function findNodesByType(string $nodeTypeName): array
     {
         $nodes = [];
-        foreach ($this->getClient()->run(
-            'MATCH ()'
-            . '-[:PARENT* {_subgraphIdentifier:"' . $this->identifier . '"}]'
-            . '->(c {_nodeTypeName:"' . $nodeTypeName . '"}) RETURN c')->records() as $record) {
-            $rawNode = $record->get('c');
-            $nodes[] = $this->mapNode($rawNode);
+        $statementResult = $this->client->send([
+            new Statement(
+                'MATCH ()-[:PARENT* {_subgraphIdentifier: $subgraphIdentifier}]->(c {_nodeTypeName: $nodeTypeName}) RETURN c',
+                [
+                    'subgraphIdentifier' => $this->identifier,
+                    'nodeTypeName' => $nodeTypeName
+                ]
+            )
+        ])[0];
+        foreach ($statementResult->getItems() as $item) {
+            $nodes[] = $this->mapNode($item->get('c'));
         }
 
         return $nodes;
@@ -80,39 +108,46 @@ class ContentSubgraph extends Arboretum\Repository\AbstractContentSubgraph
     public function traverse(ContentRepository\Model\NodeInterface $parent, callable $callback)
     {
         $callback($parent);
-        // @todo use native graph db traversal features
-        foreach ($this->getClient()->run(
-            'MATCH (p {_identifierInSubgraph:"' . $parent->getIdentifier() . '"})'
-            . '-[:PARENT* {_subgraphIdentifier:"' . $this->identifier . '"}]'
-            . '->(c)'
-            . ' RETURN c'
-        )->records() as $record) {
-            $node = $this->mapNode($record->get('c'));
+
+        $statementResult = $this->client->send([
+            new Statement(
+                'MATCH ({_identifierInSubgraph: $parentIdentifier})-[:PARENT* {_subgraphIdentifier: $subgraphIdentifier}]->(c) RETURN c',
+                [
+                    'subgraphIdentifier' => $this->identifier,
+                    'parentIdentifier' => $parent->getIdentifier()
+                ]
+            )
+        ])[0];
+
+        foreach ($statementResult->getItems() as $item) {
+            $node = $this->mapNode($item->get('c'));
             $callback($node);
         }
     }
 
-    protected function mapNode(\GraphAware\Bolt\Result\Type\Node $node): ContentRepository\Model\NodeInterface
+    protected function mapNode(array $rawData)
     {
-        $mappedNode = new NodeAdapter($this);
-        $mappedNode->nodeType = $this->nodeTypeManager->getNodeType($node->get('_nodeTypeName'));
-        $mappedNode->identifier = $node->get('_identifierInSubgraph');
-        $mappedNode->subgraphIdentifier = $node->get('_subgraphIdentifier');
+        $mappedNode = new Arboretum\Entity\NodeAdapter($this);
+        $mappedNode->nodeType = $this->nodeTypeManager->getNodeType($rawData['_nodeTypeName']);
+        $mappedNode->identifier = $rawData['_identifierInSubgraph'];
+        $mappedNode->subgraphIdentifier = $rawData['_subgraphIdentifier'];
 
         $properties = [];
-        foreach ($node->values() as $propertyName => $value) {
+        foreach ($rawData as $propertyName => $value) {
             if (strpos($propertyName, '_') !== 0) {
                 $properties = Arrays::setValueByPath($properties, $propertyName, $value);
             }
         }
-
-        $mappedNode->properties = $properties;
+        $mappedNode->properties = new PropertyCollection($properties);
 
         return $mappedNode;
     }
 
-    protected function getClient(): Client
+    /**
+     * @return Neo4jClient
+     */
+    protected function getClient()
     {
-        return $this->client->getClient();
+        return $this->client;
     }
 }

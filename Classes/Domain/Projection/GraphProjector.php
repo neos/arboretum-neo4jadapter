@@ -12,11 +12,9 @@ namespace Neos\Arboretum\Neo4jAdapter\Domain\Projection;
  * source code.
  */
 
-use GraphAware\Bolt\Result\Type\Relationship;
-use GraphAware\Neo4j\Client\Client;
-use GraphAware\Neo4j\Client\Transaction\Transaction;
 use Neos\Arboretum\Domain\Projection\AbstractGraphProjector;
 use Neos\Arboretum\Infrastructure\Dto\Node;
+use Neos\Arboretum\Neo4jAdapter\Infrastructure\Dto\Statement;
 use Neos\Arboretum\Neo4jAdapter\Infrastructure\Service\Neo4jClient;
 use Neos\Flow\Annotations as Flow;
 use Neos\Utility\Arrays;
@@ -34,20 +32,15 @@ class GraphProjector extends AbstractGraphProjector
      */
     protected $client;
 
-    /**
-     * @var Transaction
-     */
-    protected $transaction;
-
 
     public function reset()
     {
-        $this->getClient()->run('MATCH (n) DETACH DELETE n');
+        $this->client->send([new Statement('MATCH (n) DETACH DELETE n')]);
     }
 
     public function isEmpty(): bool
     {
-        $result = $this->getClient()->run('MATCH () RETURN count(*) AS cnt');
+        $result = $this->client->send([new Statement('MATCH () RETURN count(*) AS count')]);;
         \Neos\Flow\var_dump($result, 'isEmpty');
         #\Neos\Flow\var_dump($result);
         exit;
@@ -67,7 +60,12 @@ class GraphProjector extends AbstractGraphProjector
             }
         }
         $nodeLabel = str_replace(['.', ':'], ['', ''], $node->nodeTypeName);
-        $this->getClient()->run('CREATE (n:' . $nodeLabel . ') SET n += {properties}', ['properties' => $properties]);
+        $this->getClient()->send([
+            new Statement('CREATE (n: $nodeLabel) SET n += $properties', [
+                'nodeLabel' => $nodeLabel,
+                'properties' => $properties
+            ])
+        ]);
     }
 
     protected function flattenPropertyValue(array & $properties, string $propertyPath, array $propertyValue)
@@ -84,24 +82,26 @@ class GraphProjector extends AbstractGraphProjector
 
     protected function getNode(string $identifierInGraph): Node
     {
-        // @todo: escape stuff
-        /** @var \GraphAware\Bolt\Result\Type\Node $node */
-        $node = $this->getClient()->run(
-            'MATCH (n {_identifierInGraph: "' . $identifierInGraph . '"}) RETURN n'
-        )->firstRecord()->get('n');
+        $result = $this->getClient()->send([
+            new Statement('MATCH (n {_identifierInGraph: $identifier}) RETURN n', [
+                'identifier' => $identifierInGraph
+            ])
+        ])[0];
+
+        $rawData = $result->getItem(0)->get('n');
         $properties = [];
-        foreach ($node->values() as $propertyName => $value) {
+        foreach ($rawData as $propertyName => $value) {
             if (strpos($propertyName, '_') !== 0) {
                 $properties = Arrays::setValueByPath($properties, $propertyName, $value);
             }
         }
 
         return new Node(
-            $node->get('_identifierInGraph'),
-            $node->get('_identifierInSubgraph'),
-            $node->get('_subgraphIdentifier'),
+            $rawData['_identifierInGraph'],
+            $rawData['_identifierInSubgraph'],
+            $rawData['_subgraphIdentifier'],
             $properties,
-            $node->get('_nodeTypeName')
+            $rawData['_nodeTypeName']
         );
     }
 
@@ -118,13 +118,19 @@ class GraphProjector extends AbstractGraphProjector
         }
         foreach ($subgraphIdentifiers as $subgraphIdentifier) {
             $properties['_subgraphIdentifier'] = $subgraphIdentifier;
-            $this->getClient()->run(
-                'MATCH (p {_identifierInGraph:"' . $parentNodesIdentifierInGraph . '"})'
-                . 'MATCH (c {_identifierInGraph:"' . $childNodesIdentifierInGraph . '"})'
-                . 'CREATE (p)-[e:PARENT]->(c)'
-                . 'SET e+= {properties}',
-                ['properties' => $properties]
-            );
+            $this->getClient()->send([
+                new Statement(
+                    'MATCH (p {_identifierInGraph: $parentIdentifier})'
+                    . 'MATCH (c {_identifierInGraph: $childIdentifier})'
+                    . 'CREATE (p)-[e:PARENT]->(c)'
+                    . 'SET e+= $properties',
+                    [
+                        'parentIdentifier' => $parentNodesIdentifierInGraph,
+                        'childIdentifier' => $childNodesIdentifierInGraph,
+                        'properties' => $properties
+                    ]
+                )
+            ]);
         }
     }
 
@@ -133,33 +139,47 @@ class GraphProjector extends AbstractGraphProjector
         string $newVariantNodesIdentifierInGraph,
         array $subgraphIdentifiers
     ) {
+        $statements = [];
         foreach ($subgraphIdentifiers as $subgraphIdentifier) {
-            $record = $this->getClient()->run(
-                'MATCH (p)'
-                . '-[e:PARENT {_subgraphIdentifier:"' . $subgraphIdentifier . '"}]'
-                . '->(c {_identifierInGraph:"' . $fallbackNodesIdentifierInGraph . '"})'
-                . ' RETURN e,p'
-            )->firstRecord();
-            /** @var Relationship $inboundEdge */
-            $inboundEdge = $record->get('e');
-            /** @var \GraphAware\Bolt\Result\Type\Node $parentNode */
-            $parentNode = $record->get('p');
+            $statementResult = $this->getClient()->send([
+                new Statement(
+                    'MATCH (p)-[e:PARENT {_subgraphIdentifier: $subgraphIdentifier}]->(c {_identifierInGraph: $childIdentifier})'
+                    . ' RETURN e,p',
+                    [
+                        'subgraphIdentifier' => $subgraphIdentifier,
+                        'childIdentifier' => $fallbackNodesIdentifierInGraph
+                    ]
+                )
+            ]);
 
-            $this->getClient()->run(
-                'MATCH (p {_identifierInGraph:"' . $parentNode->value('_identifierInGraph') . '"})'
-                . 'MATCH (c {_identifierInGraph:"' . $newVariantNodesIdentifierInGraph . '"})'
+            \Neos\Flow\var_dump($statementResult);
+            $statementResult= $statementResult[0];
+
+            $parentNodeData = $statementResult->getItem(0)->get('p');
+            $inboundEdgeData = $statementResult->getItem(0)->get('e');
+
+            $statements[] = new Statement(
+                'MATCH (p {_identifierInGraph: $parentIdentifier})'
+                . 'MATCH (c {_identifierInGraph: $childIdentifier})'
                 . 'CREATE (p)-[e:PARENT]->(c)'
-                . 'SET e += {properties}',
-                ['properties' => $inboundEdge->values()]
+                . 'SET e += $properties',
+                [
+                    'parentIdentifier' => $parentNodeData['_identifierInGraph'],
+                    'childIdentifier' => $newVariantNodesIdentifierInGraph,
+                    'properties' => $inboundEdgeData
+                ]
             );
 
-            $this->getClient()->run(
-                'MATCH (p)'
-                . '-[e:PARENT {_subgraphIdentifier:"' . $subgraphIdentifier . '"}]'
-                . '->(c {_identifierInGraph:"' . $fallbackNodesIdentifierInGraph . '"})'
-                . ' DELETE e'
+            $statements[] = new Statement(
+                'MATCH ()-[e:PARENT {_subgraphIdentifier: $subgraphIdentifier}]->({_identifierInGraph: $childIdentifier})'
+                . ' DELETE e',
+                [
+                    'subgraphIdentifier' => $subgraphIdentifier,
+                    'childIdentifier' => $fallbackNodesIdentifierInGraph
+                ]
             );
         }
+        $this->getClient()->send($statements);
     }
 
     protected function connectRelation(string $startNodesIdentifierInGraph, string $endNodesIdentifierInGraph, string $relationshipName, array $properties, array $subgraphIdentifiers)
@@ -169,19 +189,12 @@ class GraphProjector extends AbstractGraphProjector
 
     protected function transactional(callable $operations)
     {
-        $this->transaction = $this->getClient()->transaction();
-        $this->transaction->begin();
-        $operations();
-        $this->transaction->commit();
-        $this->transaction = null;
+        $this->getClient()->transactional($operations);
     }
 
 
-    /**
-     * @return Client|Transaction
-     */
-    protected function getClient()
+    protected function getClient(): Neo4jClient
     {
-        return $this->transaction ?: $this->client->getClient();
+        return $this->client;
     }
 }

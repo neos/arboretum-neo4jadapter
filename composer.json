@@ -4,8 +4,7 @@
   "description": "The neo4j database backend for the Neos Arboretum",
   "license": "GPL-3.0+",
   "require": {
-    "neos/arboretum": "*",
-    "graphaware/neo4j-php-client": "~4.0"
+    "neos/arboretum": "*"
   },
   "autoload": {
     "psr-4": {
