@@ -12,6 +12,8 @@ namespace Neos\Arboretum\Neo4jAdapter\Domain\Repository;
  * source code.
  */
 use Neos\Arboretum\Domain as Arboretum;
+use Neos\ContentRepository\Domain\DimensionCombination;
+use Neos\ContentRepository\Domain\Content;
 use Neos\Flow\Annotations as Flow;
 
 /**
@@ -24,7 +26,7 @@ use Neos\Flow\Annotations as Flow;
  */
 class ContentGraph extends Arboretum\Repository\AbstractContentGraph
 {
-    protected function createSubgraph(string $editingSessionName, array $dimensionValues): Arboretum\Repository\ContentSubgraphInterface
+    protected function createSubgraph(string $editingSessionName, DimensionCombination\Value\ContentDimensionValueCombination $dimensionValues): Content\Repository\ContentSubgraphInterface
     {
         return new ContentSubgraph($editingSessionName, $dimensionValues);
     }

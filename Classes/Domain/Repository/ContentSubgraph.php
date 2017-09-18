@@ -16,7 +16,6 @@ use Neos\Arboretum\Domain as Arboretum;
 use Neos\Arboretum\Neo4jAdapter\Infrastructure\Dto\Statement;
 use Neos\Arboretum\Neo4jAdapter\Infrastructure\Service\Neo4jClient;
 use Neos\ContentRepository\Domain as ContentRepository;
-use Neos\ContentRepository\EventSourced\Domain\Model\Content\PropertyCollection;
 use Neos\Flow\Annotations as Flow;
 use Neos\Utility\Arrays;
 
@@ -138,7 +137,7 @@ class ContentSubgraph extends Arboretum\Repository\AbstractContentSubgraph
                 $properties = Arrays::setValueByPath($properties, $propertyName, $value);
             }
         }
-        $mappedNode->properties = new PropertyCollection($properties);
+        $mappedNode->properties = new ContentRepository\Model\PropertyCollection($properties);
 
         return $mappedNode;
     }
